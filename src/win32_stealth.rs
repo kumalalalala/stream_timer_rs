@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HGLOBAL, HLOCAL,
-    HWND, LPARAM, LocalFree, RECT, WAIT_OBJECT_0, WPARAM,
+    HWND, LPARAM, LocalFree, RECT, S_OK, WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_CLOAKED, DWMWA_TEXT_COLOR,
@@ -16,7 +16,9 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -33,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
     IsIconic, IsWindowVisible, PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow, SetProcessDPIAware,
-    SetWindowLongPtrW, SetWindowPos, WM_APP, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    SetWindowLongPtrW, SetWindowPos, WM_APP, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PCWSTR};
 
@@ -170,10 +172,23 @@ pub fn get_corner_peek_position() -> (i32, i32) {
 /// without altering `WS_EX_TOOLWINDOW` (keeps Window Capture pickers working).
 pub fn try_taskbar_tab(hwnd: HWND, show: bool) -> bool {
     unsafe {
-        let Ok(tb): windows::core::Result<ITaskbarList> =
-            CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
-        else {
-            return false;
+        let created: windows::core::Result<ITaskbarList> =
+            CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER);
+        let (tb, should_uninit) = match created {
+            Ok(tb) => (tb, false),
+            Err(_) => {
+                let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                let did_init = hr == S_OK;
+                match CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER) {
+                    Ok(tb) => (tb, did_init),
+                    Err(_) => {
+                        if did_init {
+                            CoUninitialize();
+                        }
+                        return false;
+                    }
+                }
+            }
         };
         let _ = tb.HrInit();
         let res = if show {
@@ -181,6 +196,10 @@ pub fn try_taskbar_tab(hwnd: HWND, show: bool) -> bool {
         } else {
             tb.DeleteTab(hwnd)
         };
+        drop(tb);
+        if should_uninit {
+            CoUninitialize();
+        }
         res.is_ok()
     }
 }
@@ -190,10 +209,36 @@ pub fn set_tool_window_style(hwnd: HWND, is_tool: bool) {
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let tool = WS_EX_TOOLWINDOW.0 as isize;
         let app = WS_EX_APPWINDOW.0 as isize;
+        let noact = WS_EX_NOACTIVATE.0 as isize;
         let new_ex = if is_tool {
-            (ex | tool) & !app
+            (ex | tool | noact) & !app
         } else {
-            (ex & !tool) | app
+            ex & !(tool | noact)
+        };
+        if new_ex != ex {
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+    }
+}
+
+pub fn set_noactivate_style(hwnd: HWND, noactivate: bool) {
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let app = WS_EX_APPWINDOW.0 as isize;
+        let noact = WS_EX_NOACTIVATE.0 as isize;
+        let new_ex = if noactivate {
+            (ex | noact) & !app
+        } else {
+            ex & !noact
         };
         if new_ex != ex {
             let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
@@ -213,6 +258,7 @@ pub fn set_tool_window_style(hwnd: HWND, is_tool: bool) {
 pub fn set_taskbar_hidden(hwnd: HWND, hidden: bool, also_hide_alt_tab: bool) {
     if hidden {
         let _ = try_taskbar_tab(hwnd, false);
+        set_noactivate_style(hwnd, true);
         if also_hide_alt_tab {
             set_tool_window_style(hwnd, true);
         }

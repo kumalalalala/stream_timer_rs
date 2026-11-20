@@ -19,7 +19,9 @@ Khi bạn bấm nút thu nhỏ (`_`) trên một cửa sổ Windows thông thư�
 | **4. Corner Peek 2px** | `corner_peek` | Giữ trên Taskbar | **OBS BitBlt** & **WGC** | Neo 2px ở góc dưới màn hình nhưng vẫn giữ biểu tượng trên thanh Taskbar để click mở lại nhanh. |
 | **5. Native Minimize** | `native` | Thu nhỏ chuẩn Windows | Chỉ dùng cho **OBS Browser Source** | Thu nhỏ cửa sổ truyền thống (`SW_MINIMIZE`) khi bạn chỉ lấy hình qua đường dẫn Web Localhost. |
 
-> 💡 **Tùy chọn ẩn thêm khỏi `Alt + Tab` (v0.2.0):** Trong menu chuột phải có thêm mục **`Ẩn khỏi Alt+Tab khi ở khay (chọn nguồn OBS trước)`**. Mặc định mục này tắt để bạn có thể chọn nguồn quay Window Capture trong OBS/TikTok bất cứ lúc nào (kể cả khi đồng hồ đang ở dưới khay). Sau khi đã thêm nguồn vào OBS xong, bạn có thể tích bật mục này để ẩn hoàn toàn đồng hồ khỏi bảng `Alt + Tab`.
+> 💡 **Tùy chọn ẩn thêm khỏi `Alt + Tab` & Bảo vệ chống `Win + D` (v0.2.0 – v0.3.0):**
+> - Trong menu chuột phải có mục **`Ẩn khỏi Alt+Tab khi ở khay (chọn nguồn OBS trước)`** giúp bạn giữ đồng hồ hiển thị trong bộ chọn cửa sổ của OBS/TikTok ngay cả khi đang ở dưới khay hệ thống, và chỉ ẩn khỏi `Alt + Tab` khi bạn chủ động tích chọn.
+> - **Bản v0.3.0** bổ sung cơ chế **chống đóng băng khi bấm `Win + D` (Show Desktop)** (`ShowWindowAsync(SW_SHOWNOACTIVATE)` + `WM_APP_REASSERT_STEALTH`), khóa Z-order qua `WM_WINDOWPOSCHANGING` (`HWND_BOTTOM | SWP_NOACTIVATE`), gắn cờ `WS_EX_NOACTIVATE` để không bao giờ vô tình chiếm focus khi đóng ứng dụng khác, và tự động ẩn lại nút Taskbar khi `explorer.exe` khởi động lại (`TaskbarCreated`).
 
 ---
 

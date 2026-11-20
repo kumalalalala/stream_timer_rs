@@ -1,6 +1,6 @@
 [package]
 name = "stream_timer"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 build = "build.rs"
 description = "Minimalist 00:00:00 stream timer with DirectWrite AA, System Tray, Browser Source, and Win32 stealth minimize."

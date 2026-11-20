@@ -21,16 +21,18 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CW_USEDEFAULT, CheckMenuItem, CheckMenuRadioItem, CreateIcon, CreatePopupMenu,
     CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, GWLP_USERDATA, GetClientRect,
-    GetCursorPos, GetMessageW, HICON, HMENU, IDC_ARROW, KillTimer, LoadCursorW, LoadIconW,
-    MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MINMAXINFO, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SC_MINIMIZE, SW_MINIMIZE, SW_SHOW, SetTimer,
-    SetWindowLongPtrW, SetWindowTextW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-    TrackPopupMenu, TranslateMessage, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CONTEXTMENU, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HOTKEY,
-    WM_KEYDOWN, WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_SYSCOMMAND,
-    WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
+    GetCursorPos, GetMessageW, HICON, HMENU, HWND_BOTTOM, IDC_ARROW, IsIconic, KillTimer,
+    LoadCursorW, LoadIconW, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MINMAXINFO, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    RegisterWindowMessageW, SC_MINIMIZE, SIZE_MINIMIZED, SW_MINIMIZE, SW_SHOW, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOZORDER, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindowAsync,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WA_ACTIVE,
+    WA_CLICKACTIVE, WINDOWPOS, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+    WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONUP,
+    WM_NCCREATE, WM_NULL, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_SYSCOMMAND, WM_TIMER,
+    WM_WINDOWPOSCHANGING, WNDCLASSEXW, WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW,
 };
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, w};
 
 use crate::browser_server::BrowserTimerServer;
 use crate::icon::render_stream_timer_rgba;
@@ -47,6 +49,7 @@ const BASE_TITLE: &str = "Stream Timer";
 const CLASS_NAME: &str = "StreamTimerWindowClass";
 
 const WM_TRAYICON: u32 = WM_APP + 1;
+const WM_APP_REASSERT_STEALTH: u32 = WM_APP + 3;
 const TIMER_TICK_ID: usize = 1;
 const TIMER_TITLE_ID: usize = 2;
 const GLOBAL_TRAY_HOTKEY_ID: i32 = 0x5354;
@@ -107,6 +110,7 @@ pub struct StreamTimerState {
     pub last_text: String,
     pub suppress_activate_until: Option<Instant>,
     pub tray_added: bool,
+    pub taskbar_created_msg: u32,
     pub hotkey_registered: bool,
     pub single_instance: Option<SingleInstanceGuard>,
     pub bg_brush: HBRUSH,
@@ -114,6 +118,22 @@ pub struct StreamTimerState {
 }
 
 impl StreamTimerState {
+    fn add_tray_icon(&mut self) {
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: self.hwnd,
+            uID: 1,
+            uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage: WM_TRAYICON,
+            hIcon: self.hicon,
+            ..Default::default()
+        };
+        let tip = to_wide("Stream Timer — Click để hiện/ẩn");
+        let copy_len = tip.len().min(nid.szTip.len());
+        nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
+        self.tray_added = unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() };
+    }
+
     fn set_title(&self, title: &str) {
         let wide = to_wide(title);
         unsafe {
@@ -556,20 +576,8 @@ unsafe extern "system" fn wnd_proc(
             WM_CREATE => {
                 state.hwnd = hwnd;
                 apply_dark_titlebar(hwnd);
-
-                let mut nid = NOTIFYICONDATAW {
-                    cbSize: size_of::<NOTIFYICONDATAW>() as u32,
-                    hWnd: hwnd,
-                    uID: 1,
-                    uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
-                    uCallbackMessage: WM_TRAYICON,
-                    hIcon: state.hicon,
-                    ..Default::default()
-                };
-                let tip = to_wide("Stream Timer — Click để hiện/ẩn");
-                let copy_len = tip.len().min(nid.szTip.len());
-                nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
-                state.tray_added = Shell_NotifyIconW(NIM_ADD, &nid).as_bool();
+                state.taskbar_created_msg = RegisterWindowMessageW(w!("TaskbarCreated"));
+                state.add_tray_icon();
 
                 state.hotkey_registered = RegisterHotKey(
                     Some(hwnd),
@@ -598,11 +606,42 @@ unsafe extern "system" fn wnd_proc(
                 LRESULT(0)
             }
             WM_SIZE => {
+                if wparam.0 == SIZE_MINIMIZED as usize && state.is_stealth_minimized {
+                    let _ = ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE);
+                    let _ = PostMessageW(Some(hwnd), WM_APP_REASSERT_STEALTH, WPARAM(0), LPARAM(0));
+                    return LRESULT(0);
+                }
                 let w = (lparam.0 & 0xFFFF) as i16 as i32;
                 let h = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 if w > 0 && h > 0 && !state.is_stealth_minimized {
                     state.renderer.recompute_font_size(w, h);
                     let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                LRESULT(0)
+            }
+            WM_WINDOWPOSCHANGING => {
+                if state.is_stealth_minimized && state.in_tray {
+                    let wp = &mut *(lparam.0 as *mut WINDOWPOS);
+                    wp.hwndInsertAfter = HWND_BOTTOM;
+                    wp.flags &= !SWP_NOZORDER;
+                    wp.flags |= SWP_NOACTIVATE;
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_APP_REASSERT_STEALTH => {
+                if state.is_stealth_minimized {
+                    if IsIconic(hwnd).as_bool() {
+                        let _ = ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE);
+                    }
+                    if state.in_tray {
+                        set_taskbar_hidden(hwnd, true, state.hide_from_alt_tab);
+                    }
+                    let move_pos = if state.was_corner_peek {
+                        Some(get_corner_peek_position())
+                    } else {
+                        None
+                    };
+                    send_to_background(hwnd, move_pos);
                 }
                 LRESULT(0)
             }
@@ -789,7 +828,16 @@ unsafe extern "system" fn wnd_proc(
                 PostQuitMessage(0);
                 LRESULT(0)
             }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => {
+                if state.taskbar_created_msg != 0 && msg == state.taskbar_created_msg {
+                    state.add_tray_icon();
+                    if state.in_tray {
+                        set_taskbar_hidden(hwnd, true, state.hide_from_alt_tab);
+                    }
+                    return LRESULT(0);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
         }
     }
 }
@@ -859,6 +907,7 @@ pub fn run_app(config: AppConfig, single_instance: Option<SingleInstanceGuard>) 
             last_text: "00:00:00".to_owned(),
             suppress_activate_until: None,
             tray_added: false,
+            taskbar_created_msg: 0,
             hotkey_registered: false,
             single_instance,
             bg_brush,
