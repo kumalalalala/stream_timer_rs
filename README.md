@@ -13,11 +13,13 @@ Khi bạn bấm nút thu nhỏ (`_`) trên một cửa sổ Windows thông thư�
 
 | Chế độ (Minimize Mode) | Tham số CLI (`--mode`) | Hiển thị trên Taskbar / Tray | Tương thích OBS / Phần mềm Stream | Cơ chế hoạt động |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Background (WGC)** *(Mặc định)* | `background_wgc` | Giữ trên Taskbar | **OBS Window Capture** (`Windows 10 1903+ / WGC`) | Đưa cửa sổ xuống lớp nền dưới cùng (`HWND_BOTTOM`) thay vì đóng băng `WS_ICONIC`, giữ bề mặt DirectWrite luôn cập nhật mỗi giây. |
-| **2. System Tray (WGC)** | `tray_wgc` | Ẩn khỏi Taskbar & Alt+Tab, thu vào **System Tray** | **OBS Window Capture** (`WGC`) + **Browser Source** | Vừa ẩn hoàn toàn khỏi thanh Taskbar và `Alt + Tab` (`WS_EX_TOOLWINDOW`), vừa duy trì kết xuất nền cho OBS WGC. |
+| **1. System Tray (WGC)** *(Mặc định từ v0.2.0)* | `tray_wgc` | Ẩn khỏi Taskbar (qua COM `ITaskbarList`), thu vào **System Tray** | **OBS / TikTok Live Studio Window Capture (WGC)** + **Browser Source** | Ẩn nút Taskbar bằng giao diện COM `ITaskbarList::DeleteTab` mà không bật `WS_EX_TOOLWINDOW`, giúp **OBS / TikTok Live Studio vẫn nhìn thấy và chọn được cửa sổ ngay cả khi đã thu vào khay hệ thống**. Chống tự bật lại khi chuyển focus. |
+| **2. Background (WGC)** | `background_wgc` | Giữ trên Taskbar | **OBS Window Capture** (`Windows 10 1903+ / WGC`) | Đưa cửa sổ xuống lớp nền dưới cùng (`HWND_BOTTOM`) thay vì đóng băng `WS_ICONIC`, giữ bề mặt DirectWrite luôn cập nhật mỗi giây. |
 | **3. System Tray + Corner Peek 2px** | `tray_corner_peek` | Ẩn khỏi Taskbar, thu vào **System Tray** | Mọi trình quay màn hình (**OBS BitBlt cũ**, Discord, Zoom...) | Neo 2px của cửa sổ ở góc dưới cùng bên phải màn hình và thu vào System Tray để cả trình quay `BitBlt` đời cũ lẫn `WGC` đều bắt được hình. |
 | **4. Corner Peek 2px** | `corner_peek` | Giữ trên Taskbar | **OBS BitBlt** & **WGC** | Neo 2px ở góc dưới màn hình nhưng vẫn giữ biểu tượng trên thanh Taskbar để click mở lại nhanh. |
 | **5. Native Minimize** | `native` | Thu nhỏ chuẩn Windows | Chỉ dùng cho **OBS Browser Source** | Thu nhỏ cửa sổ truyền thống (`SW_MINIMIZE`) khi bạn chỉ lấy hình qua đường dẫn Web Localhost. |
+
+> 💡 **Tùy chọn ẩn thêm khỏi `Alt + Tab` (v0.2.0):** Trong menu chuột phải có thêm mục **`Ẩn khỏi Alt+Tab khi ở khay (chọn nguồn OBS trước)`**. Mặc định mục này tắt để bạn có thể chọn nguồn quay Window Capture trong OBS/TikTok bất cứ lúc nào (kể cả khi đồng hồ đang ở dưới khay). Sau khi đã thêm nguồn vào OBS xong, bạn có thể tích bật mục này để ẩn hoàn toàn đồng hồ khỏi bảng `Alt + Tab`.
 
 ---
 

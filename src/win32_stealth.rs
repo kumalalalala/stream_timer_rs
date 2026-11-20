@@ -16,6 +16,7 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -26,6 +27,7 @@ use windows::Win32::System::Threading::{
     WaitForMultipleObjects,
 };
 use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GW_HWNDNEXT, GWL_EXSTYLE, GetWindow,
     GetWindowLongPtrW, GetWindowRect, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
@@ -164,26 +166,59 @@ pub fn get_corner_peek_position() -> (i32, i32) {
     }
 }
 
-pub fn set_taskbar_hidden(hwnd: HWND, hidden: bool) {
+/// Remove or add the window's button on the Windows Taskbar via COM `ITaskbarList`
+/// without altering `WS_EX_TOOLWINDOW` (keeps Window Capture pickers working).
+pub fn try_taskbar_tab(hwnd: HWND, show: bool) -> bool {
+    unsafe {
+        let Ok(tb): windows::core::Result<ITaskbarList> =
+            CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+        else {
+            return false;
+        };
+        let _ = tb.HrInit();
+        let res = if show {
+            tb.AddTab(hwnd)
+        } else {
+            tb.DeleteTab(hwnd)
+        };
+        res.is_ok()
+    }
+}
+
+pub fn set_tool_window_style(hwnd: HWND, is_tool: bool) {
     unsafe {
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let tool = WS_EX_TOOLWINDOW.0 as isize;
         let app = WS_EX_APPWINDOW.0 as isize;
-        let new_ex = if hidden {
+        let new_ex = if is_tool {
             (ex | tool) & !app
         } else {
             (ex & !tool) | app
         };
-        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
+        if new_ex != ex {
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+    }
+}
+
+pub fn set_taskbar_hidden(hwnd: HWND, hidden: bool, also_hide_alt_tab: bool) {
+    if hidden {
+        let _ = try_taskbar_tab(hwnd, false);
+        if also_hide_alt_tab {
+            set_tool_window_style(hwnd, true);
+        }
+    } else {
+        set_tool_window_style(hwnd, false);
+        let _ = try_taskbar_tab(hwnd, true);
     }
 }
 

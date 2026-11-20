@@ -11,6 +11,7 @@ use stream_timer::renderer::DirectWriteRenderer;
 use stream_timer::timer_engine::TimerEngine;
 use stream_timer::win32_stealth::{
     InstanceAcquisition, MinimizeMode, acquire_or_wake_named, enable_per_monitor_dpi,
+    set_taskbar_hidden,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
@@ -302,5 +303,57 @@ fn directwrite_infinite_hours_autoscale_never_overflows() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn tray_mode_keeps_window_capturable_unless_alt_tab_hide_requested() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GWL_EXSTYLE, GetWindowLongPtrW, IsIconic,
+        IsWindowVisible, WINDOW_EX_STYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
+        WS_VISIBLE,
+    };
+    use windows::core::w;
+
+    unsafe {
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!("StreamTimerCaptureFlagTest"),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            100,
+            100,
+            320,
+            140,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("CreateWindowExW");
+
+        // Hide taskbar button only (also_hide_alt_tab = false) -> WS_EX_TOOLWINDOW must stay 0
+        set_taskbar_hidden(hwnd, true, false);
+        let ex_capturable = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_eq!(
+            ex_capturable & WS_EX_TOOLWINDOW.0,
+            0,
+            "Capturable tray mode must keep WS_EX_TOOLWINDOW == 0 so OBS/TikTok pickers see it"
+        );
+        assert!(IsWindowVisible(hwnd).as_bool(), "must remain visible");
+        assert!(!IsIconic(hwnd).as_bool(), "must not be iconic");
+
+        // Optional Alt+Tab hide (also_hide_alt_tab = true) -> WS_EX_TOOLWINDOW set
+        set_taskbar_hidden(hwnd, true, true);
+        let ex_alt_hidden = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_ne!(ex_alt_hidden & WS_EX_TOOLWINDOW.0, 0);
+        assert_eq!(ex_alt_hidden & WS_EX_APPWINDOW.0, 0);
+
+        // Restoring resets WS_EX_TOOLWINDOW cleanly
+        set_taskbar_hidden(hwnd, false, false);
+        let ex_restored = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_eq!(ex_restored & WS_EX_TOOLWINDOW.0, 0);
+
+        let _ = DestroyWindow(hwnd);
     }
 }

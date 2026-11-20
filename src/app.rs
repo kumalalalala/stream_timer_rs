@@ -8,6 +8,7 @@ use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POI
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, EndPaint, HBRUSH, InvalidateRect, PAINTSTRUCT, UpdateWindow,
 };
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -38,8 +39,8 @@ use crate::session_store::SessionStore;
 use crate::timer_engine::TimerEngine;
 use crate::win32_stealth::{
     MinimizeMode, SingleInstanceGuard, WM_APP_WAKE, apply_dark_titlebar, copy_to_clipboard,
-    get_corner_peek_position, get_window_rect, restore_from_background, send_to_background,
-    set_always_on_top, set_taskbar_hidden, to_wide,
+    focus_next_window, get_corner_peek_position, get_window_rect, restore_from_background,
+    send_to_background, set_always_on_top, set_taskbar_hidden, set_tool_window_style, to_wide,
 };
 
 const BASE_TITLE: &str = "Stream Timer";
@@ -66,6 +67,7 @@ const IDM_ON_TOP: usize = 1020;
 const IDM_COPY_URL: usize = 1021;
 const IDM_COPY_URL_TRANSPARENT: usize = 1022;
 const IDM_RESUME_SESSION: usize = 1023;
+const IDM_HIDE_ALT_TAB: usize = 1024;
 const IDM_QUIT: usize = 1099;
 
 pub struct AppConfig {
@@ -79,7 +81,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            minimize_mode: MinimizeMode::BackgroundWgc,
+            minimize_mode: MinimizeMode::TrayWgc,
             preferred_port: 18080,
             width: 440,
             height: 140,
@@ -97,6 +99,7 @@ pub struct StreamTimerState {
     pub renderer: DirectWriteRenderer,
     pub minimize_mode: MinimizeMode,
     pub always_on_top: bool,
+    pub hide_from_alt_tab: bool,
     pub is_stealth_minimized: bool,
     pub in_tray: bool,
     pub was_corner_peek: bool,
@@ -248,7 +251,7 @@ impl StreamTimerState {
         if self.is_stealth_minimized {
             if use_tray && !self.in_tray {
                 self.in_tray = true;
-                set_taskbar_hidden(self.hwnd, true);
+                set_taskbar_hidden(self.hwnd, true, self.hide_from_alt_tab);
             }
             return;
         }
@@ -261,7 +264,7 @@ impl StreamTimerState {
             Some(Instant::now() + std::time::Duration::from_millis(450));
 
         if use_tray {
-            set_taskbar_hidden(self.hwnd, true);
+            set_taskbar_hidden(self.hwnd, true, self.hide_from_alt_tab);
         }
 
         if use_corner_peek {
@@ -292,7 +295,7 @@ impl StreamTimerState {
             Some(Instant::now() + std::time::Duration::from_millis(200));
 
         if was_tray {
-            set_taskbar_hidden(self.hwnd, false);
+            set_taskbar_hidden(self.hwnd, false, self.hide_from_alt_tab);
         }
         restore_from_background(self.hwnd, move_to, self.always_on_top);
 
@@ -382,6 +385,23 @@ impl StreamTimerState {
                 (MF_BYCOMMAND | if self.always_on_top { MF_CHECKED } else { MF_UNCHECKED }).0,
             );
 
+            append_item(
+                menu,
+                IDM_HIDE_ALT_TAB,
+                "Ẩn khỏi Alt+Tab khi ở khay (chọn nguồn OBS trước)",
+            );
+            let _ = CheckMenuItem(
+                menu,
+                IDM_HIDE_ALT_TAB as u32,
+                (MF_BYCOMMAND
+                    | if self.hide_from_alt_tab {
+                        MF_CHECKED
+                    } else {
+                        MF_UNCHECKED
+                    })
+                .0,
+            );
+
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             append_item(
                 menu,
@@ -440,6 +460,17 @@ impl StreamTimerState {
                 self.flash_title("Mode: native");
             }
             IDM_ON_TOP => self.toggle_always_on_top(),
+            IDM_HIDE_ALT_TAB => {
+                self.hide_from_alt_tab = !self.hide_from_alt_tab;
+                if self.in_tray {
+                    set_tool_window_style(self.hwnd, self.hide_from_alt_tab);
+                }
+                self.flash_title(if self.hide_from_alt_tab {
+                    "Alt+Tab: Hidden in Tray"
+                } else {
+                    "Alt+Tab: Always Capturable"
+                });
+            }
             IDM_COPY_URL => self.copy_url(false),
             IDM_COPY_URL_TRANSPARENT => self.copy_url(true),
             IDM_QUIT => unsafe {
@@ -613,11 +644,27 @@ unsafe extern "system" fn wnd_proc(
                 if (active_state == WA_ACTIVE || active_state == WA_CLICKACTIVE)
                     && state.is_stealth_minimized
                 {
-                    let allowed = state
-                        .suppress_activate_until
-                        .is_none_or(|t| Instant::now() >= t);
-                    if allowed {
-                        state.exit_stealth_minimize();
+                    if state.in_tray {
+                        // Never pop out of System Tray on incidental Windows focus shifts.
+                        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
+                            hwnd,
+                            Some(windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM),
+                            0,
+                            0,
+                            0,
+                            0,
+                            windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
+                                | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE
+                                | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
+                        );
+                        focus_next_window(hwnd);
+                    } else {
+                        let allowed = state
+                            .suppress_activate_until
+                            .is_none_or(|t| Instant::now() >= t);
+                        if allowed {
+                            state.exit_stealth_minimize();
+                        }
                     }
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -748,6 +795,7 @@ unsafe extern "system" fn wnd_proc(
 }
 
 pub fn run_app(config: AppConfig, single_instance: Option<SingleInstanceGuard>) -> windows::core::Result<()> {
+    let com_init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
     enable_dark_menus();
 
     let engine = TimerEngine::new(true);
@@ -803,6 +851,7 @@ pub fn run_app(config: AppConfig, single_instance: Option<SingleInstanceGuard>) 
             renderer,
             minimize_mode: config.minimize_mode,
             always_on_top: false,
+            hide_from_alt_tab: false,
             is_stealth_minimized: false,
             in_tray: false,
             was_corner_peek: false,
@@ -842,5 +891,10 @@ pub fn run_app(config: AppConfig, single_instance: Option<SingleInstanceGuard>) 
         }
     }
 
+    if com_init {
+        unsafe {
+            CoUninitialize();
+        }
+    }
     Ok(())
 }
