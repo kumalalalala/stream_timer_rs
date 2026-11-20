@@ -1,0 +1,57 @@
+name: Build & Publish Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build Windows x64 Portable Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build optimized release binary
+        run: cargo build --release --locked
+
+      - name: Run integration tests
+        run: cargo test --release --locked
+
+      - name: Package portable ZIP archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist_pkg | Out-Null
+          Copy-Item "target/release/stream_timer.exe" "dist_pkg/stream_timer.exe"
+          Copy-Item "README.md" "dist_pkg/README.md"
+          Compress-Archive -Path "dist_pkg/*" -DestinationPath "StreamTimer-windows-x64.zip" -Force
+
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Stream Timer ${{ github.ref_name }} — Windows x64 Portable"
+          body: |
+            ### ⏱️ Stream Timer ${{ github.ref_name }} (Windows 10/11 x64)
+
+            Đồng hồ bấm giờ `00:00:00` siêu nhẹ (Win32 + DirectWrite) dành cho OBS Studio & Livestream với cơ chế **Stealth Minimize chống đứng hình khi thu nhỏ**, tích hợp **OBS Browser Source (`?bg=transparent`)**, **Khay hệ thống (`Ctrl+Shift+H`)** và **Tự động khôi phục phiên trước (`Ctrl+S`)**.
+
+            #### 📥 Tải về (Downloads)
+            - **`StreamTimer-windows-x64.zip`**: Bản nén Portable gồm `stream_timer.exe` và tài liệu hướng dẫn đầy đủ phím tắt.
+            - **`stream_timer.exe`**: File thực thi độc lập duy nhất (tải về chạy ngay, không cần cài đặt).
+
+            *(Được biên dịch và đóng gói tự động trực tiếp từ mã nguồn bởi GitHub Actions).*
+          files: |
+            StreamTimer-windows-x64.zip
+            target/release/stream_timer.exe
